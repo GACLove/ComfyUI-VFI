@@ -1,0 +1,7 @@
+*.pkl
+*.safetensors
+**/*.pkl
+**/*.safetensors
+**/__pycache__
+.dev
+.DS_Store
