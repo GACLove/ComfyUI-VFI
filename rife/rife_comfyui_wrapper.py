@@ -4,6 +4,7 @@ from typing import List, Optional, Tuple
 import torch
 from torch.nn import functional as F
 
+
 class RIFEWrapper:
     """Wrapper for RIFE model to work with ComfyUI Image tensors"""
 
@@ -96,7 +97,9 @@ class RIFEWrapper:
         # Stack all frames
         return torch.stack(output_frames, dim=0)
 
-    def _calculate_target_frame_positions(self, source_fps: float, target_fps: float, total_source_frames: int) -> List[Tuple[int, int, float]]:
+    def _calculate_target_frame_positions(
+        self, source_fps: float, target_fps: float, total_source_frames: int
+    ) -> List[Tuple[int, int, float]]:
         """
         Calculate which frames need to be generated for the target frame rate.
 

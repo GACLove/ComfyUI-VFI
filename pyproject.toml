@@ -1,0 +1,25 @@
+[project]
+name = "rife_comfyui_wrapper"
+description = "ComfyUI-RIFE is an inference wrapper for RIFE designed for use with ComfyUI."
+version = "1.0.0"
+license = { file = "LICENSE" }
+
+[project.urls]
+Repository = "https://github.com/ModelTC/ComfyUI-VFI"
+#  Used by Comfy Registry https://comfyregistry.org
+
+[tool.comfy]
+PublisherId = "gaclove"
+DisplayName = "ComfyUI-VFI"
+Icon = ""
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[tool.ruff.lint.per-file-ignores]
+
+"rife/train_log/RIFE_HDv3.py" = ["F"]
+"rife/train_log/IFNet_HDv3.py" = ["F"]

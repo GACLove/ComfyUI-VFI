@@ -1,5 +1,5 @@
-import torch
 import numpy as np
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.models as models
@@ -89,18 +89,18 @@ class MeanShift(nn.Conv2d):
         self.weight.data = torch.eye(c).view(c, c, 1, 1)
         if norm:
             self.weight.data.div_(std.view(c, 1, 1, 1))
-            self.bias.data = -1 * data_range * torch.Tensor(data_mean)
-            self.bias.data.div_(std)
+            self.bias.data = -1 * data_range * torch.Tensor(data_mean)  # type: ignore
+            self.bias.data.div_(std)  # type: ignore
         else:
             self.weight.data.mul_(std.view(c, 1, 1, 1))
-            self.bias.data = data_range * torch.Tensor(data_mean)
+            self.bias.data = data_range * torch.Tensor(data_mean)  # type: ignore
         self.requires_grad = False
 
 
 class VGGPerceptualLoss(torch.nn.Module):
     def __init__(self, rank=0):
         super(VGGPerceptualLoss, self).__init__()
-        blocks = []
+        blocks = []  # noqa: F841
         pretrained = True
         self.vgg_pretrained_features = models.vgg19(pretrained=pretrained).features
         self.normalize = MeanShift([0.485, 0.456, 0.406], [0.229, 0.224, 0.225], norm=True).cuda()
@@ -115,8 +115,8 @@ class VGGPerceptualLoss(torch.nn.Module):
         k = 0
         loss = 0
         for i in range(indices[-1]):
-            X = self.vgg_pretrained_features[i](X)
-            Y = self.vgg_pretrained_features[i](Y)
+            X = self.vgg_pretrained_features[i](X)  # type: ignore
+            Y = self.vgg_pretrained_features[i](Y)  # type: ignore
             if (i + 1) in indices:
                 loss += weights[k] * (X - Y.detach()).abs().mean() * 0.1
                 k += 1

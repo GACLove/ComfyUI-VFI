@@ -71,15 +71,15 @@ class Model:
         # loss_vgg = self.vgg(merged[-1], gt)
         if training:
             self.optimG.zero_grad()
-            loss_G = loss_l1 + loss_cons + loss_smooth * 0.1
+            loss_G = loss_l1 + loss_cons + loss_smooth * 0.1  # noqa: F405
             loss_G.backward()
             self.optimG.step()
         else:
-            flow_teacher = flow[2]
+            flow_teacher = flow[2]  # noqa: F841
         return merged[-1], {
             "mask": mask,
             "flow": flow[-1][:, :2],
             "loss_l1": loss_l1,
-            "loss_cons": loss_cons,
+            "loss_cons": loss_cons,  # noqa
             "loss_smooth": loss_smooth,
         }
