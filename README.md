@@ -2,6 +2,8 @@
 
 Video Frame Interpolation nodes for ComfyUI using RIFE (Real-Time Intermediate Flow Estimation).
 
+![RIFE](./docs/image.png)
+
 ## Features
 
 - High-quality frame interpolation using RIFE
