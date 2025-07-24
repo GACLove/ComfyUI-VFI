@@ -109,10 +109,10 @@ class RIFEWrapper:
         frame_positions = []
 
         # Calculate the time duration of the video
-        duration = (total_source_frames - 1) / source_fps
+        duration = total_source_frames / source_fps
 
         # Calculate number of target frames
-        total_target_frames = int(duration * target_fps) + 1
+        total_target_frames = int(duration * target_fps)
 
         for target_idx in range(total_target_frames):
             # Calculate the time position of this target frame
