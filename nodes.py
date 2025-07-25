@@ -6,17 +6,14 @@ import sys
 
 from .rife.rife_comfyui_wrapper import RIFEWrapper
 
-# ComfyUI imports - these are available when running as a ComfyUI node
 try:
     import comfy.utils
     import folder_paths
 except ImportError:
-    # Fallback for when not running in ComfyUI environment
     folder_paths = None
     comfy = None
 
 
-# Global model cache to avoid reloading
 MODEL_CACHE = {}
 
 
@@ -103,19 +100,25 @@ class RIFEInterpolation:
         # Get or load model
         model = self._get_or_load_model(model_name)
 
-        # Show progress if available
+        duration = len(images) / source_fps
+        total_target_frames = int(duration * target_fps)
+
         pbar = None
         if comfy and hasattr(comfy, "utils"):
-            pbar = comfy.utils.ProgressBar(1)
+            pbar = comfy.utils.ProgressBar(total_target_frames)
+
+        def progress_callback(current, total):
+            if pbar:
+                pbar.update_absolute(current, total)
 
         try:
-            # Perform interpolation
             interpolated_images = model.interpolate_frames(
-                images=images, source_fps=source_fps, target_fps=target_fps, scale=scale
+                images=images,
+                source_fps=source_fps,
+                target_fps=target_fps,
+                scale=scale,
+                progress_callback=progress_callback,
             )
-
-            if pbar:
-                pbar.update(1)
 
             return (interpolated_images,)
 

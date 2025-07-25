@@ -33,6 +33,7 @@ class RIFEWrapper:
         source_fps: float,
         target_fps: float,
         scale: float = 1.0,
+        progress_callback=None,
     ) -> torch.Tensor:
         """
         Interpolate frames from source FPS to target FPS
@@ -42,6 +43,7 @@ class RIFEWrapper:
             source_fps: Source frame rate
             target_fps: Target frame rate
             scale: Scale factor for processing
+            progress_callback: Optional callback function that accepts (current, total) parameters
 
         Returns:
             Interpolated ComfyUI Image tensor [M, H, W, C] in range [0, 1]
@@ -66,8 +68,9 @@ class RIFEWrapper:
 
         # Prepare output tensor
         output_frames = []
+        total_frames = len(frame_positions)
 
-        for source_idx1, source_idx2, interp_factor in frame_positions:
+        for idx, (source_idx1, source_idx2, interp_factor) in enumerate(frame_positions):
             if interp_factor == 0.0 or source_idx1 == source_idx2:
                 # No interpolation needed, use the source frame directly
                 output_frames.append(images[source_idx1])
@@ -93,6 +96,9 @@ class RIFEWrapper:
                 # Crop to original size and permute dimensions
                 interpolated_frame = interpolated[0, :, :height, :width].permute(1, 2, 0).cpu()
                 output_frames.append(interpolated_frame)
+
+            if progress_callback:
+                progress_callback(idx + 1, total_frames)
 
         # Stack all frames
         return torch.stack(output_frames, dim=0)
