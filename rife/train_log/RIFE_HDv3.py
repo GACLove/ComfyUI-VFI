@@ -38,12 +38,25 @@ class Model:
 
         if rank <= 0:
             if torch.cuda.is_available():
-                self.flownet.load_state_dict(convert(torch.load(path)), False)
+                try:
+                    # Try with weights_only=True for PyTorch >= 1.13
+                    self.flownet.load_state_dict(convert(torch.load(path, weights_only=True)), False)
+                except TypeError:
+                    # Fallback for older PyTorch versions
+                    self.flownet.load_state_dict(convert(torch.load(path)), False)
             else:
-                self.flownet.load_state_dict(
-                    convert(torch.load(path, map_location="cpu")),
-                    False,
-                )
+                try:
+                    # Try with weights_only=True for PyTorch >= 1.13
+                    self.flownet.load_state_dict(
+                        convert(torch.load(path, map_location="cpu", weights_only=True)),
+                        False,
+                    )
+                except TypeError:
+                    # Fallback for older PyTorch versions
+                    self.flownet.load_state_dict(
+                        convert(torch.load(path, map_location="cpu")),
+                        False,
+                    )
 
     def save_model(self, path, rank=0):
         if rank == 0:
