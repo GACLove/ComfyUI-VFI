@@ -4,6 +4,8 @@ import os
 import subprocess
 import sys
 
+import torch
+
 from .rife.rife_comfyui_wrapper import RIFEWrapper
 
 try:
@@ -97,33 +99,34 @@ class RIFEInterpolation:
         if abs(source_fps - target_fps) < 0.01:
             return (images,)
 
-        # Get or load model
-        model = self._get_or_load_model(model_name)
+        with torch.amp.autocast("cuda"):
+            # Get or load model
+            model = self._get_or_load_model(model_name)
 
-        duration = len(images) / source_fps
-        total_target_frames = int(duration * target_fps)
+            duration = len(images) / source_fps
+            total_target_frames = int(duration * target_fps)
 
-        pbar = None
-        if comfy and hasattr(comfy, "utils"):
-            pbar = comfy.utils.ProgressBar(total_target_frames)
+            pbar = None
+            if comfy and hasattr(comfy, "utils"):
+                pbar = comfy.utils.ProgressBar(total_target_frames)
 
-        def progress_callback(current, total):
-            if pbar:
-                pbar.update_absolute(current, total)
+            def progress_callback(current, total):
+                if pbar:
+                    pbar.update_absolute(current, total)
 
-        try:
-            interpolated_images = model.interpolate_frames(
-                images=images,
-                source_fps=source_fps,
-                target_fps=target_fps,
-                scale=scale,
-                progress_callback=progress_callback,
-            )
+            try:
+                interpolated_images = model.interpolate_frames(
+                    images=images,
+                    source_fps=source_fps,
+                    target_fps=target_fps,
+                    scale=scale,
+                    progress_callback=progress_callback,
+                )
 
-            return (interpolated_images,)
+                return (interpolated_images,)
 
-        except Exception as e:
-            raise RuntimeError(f"Frame interpolation failed: {str(e)}")
+            except Exception as e:
+                raise RuntimeError(f"Frame interpolation failed: {str(e)}")
 
     def _get_or_load_model(self, model_name):
         """Load model from cache or disk"""

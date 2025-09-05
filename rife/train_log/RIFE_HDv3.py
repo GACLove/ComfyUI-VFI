@@ -53,7 +53,11 @@ class Model:
         imgs = torch.cat((img0, img1), 1)
         scale_list = [16 / scale, 8 / scale, 4 / scale, 2 / scale, 1 / scale]
         flow, mask, merged = self.flownet(imgs, timestep, scale_list)
-        return merged[-1]
+        # Return only the final result to save memory
+        result = merged[-1]
+        # Clear intermediate results
+        del flow, mask, merged
+        return result
 
     def update(self, imgs, gt, learning_rate=0, mul=1, training=True, flow_gt=None):
         for param_group in self.optimG.param_groups:
