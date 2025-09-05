@@ -69,9 +69,20 @@ class RIFEWrapper:
         # Calculate target frame positions
         frame_positions = self._calculate_target_frame_positions(source_fps, target_fps, total_source_frames)
 
-        # Prepare output tensor with pre-allocation for memory efficiency
+        # 内存优化：分离源帧和插值帧，只为插值帧分配内存
         total_frames = len(frame_positions)
-        output_frames = torch.empty((total_frames, height, width, 3), dtype=images.dtype, device="cpu")
+        # 统计需要插值的帧数量
+        interp_indices = []
+        for idx, (source_idx1, source_idx2, interp_factor) in enumerate(frame_positions):
+            if interp_factor != 0.0 and source_idx1 != source_idx2:
+                interp_indices.append(idx)
+
+        # 只为插值帧分配内存
+        num_interp_frames = len(interp_indices)
+        if num_interp_frames > 0:
+            interpolated_frames = torch.empty((num_interp_frames, height, width, 3), dtype=images.dtype, device="cpu")
+        else:
+            interpolated_frames = torch.empty((0, height, width, 3), dtype=images.dtype, device="cpu")
 
         # Process frames with optimized memory management and batching
         batch_size = 4  # Process 4 frames at a time for better GPU utilization
@@ -80,8 +91,8 @@ class RIFEWrapper:
         with torch.inference_mode():
             for idx, (source_idx1, source_idx2, interp_factor) in enumerate(frame_positions):
                 if interp_factor == 0.0 or source_idx1 == source_idx2:
-                    # No interpolation needed, use the source frame directly
-                    output_frames[idx] = images[source_idx1]
+                    # No interpolation needed, will handle in final assembly
+                    pass
                 else:
                     # Collect frames for batch processing
                     frame1 = images[source_idx1]
@@ -90,7 +101,9 @@ class RIFEWrapper:
 
                     # Process batch when it reaches the target size
                     if len(interp_batch) >= batch_size:
-                        self._process_interpolation_batch(interp_batch, output_frames, padding, scale, height, width)
+                        self._process_interpolation_batch_optimized(
+                            interp_batch, interpolated_frames, interp_indices, padding, scale, height, width
+                        )
                         interp_batch = []
 
                 if progress_callback:
@@ -98,9 +111,12 @@ class RIFEWrapper:
 
             # Process remaining frames in the batch
             if interp_batch:
-                self._process_interpolation_batch(interp_batch, output_frames, padding, scale, height, width)
+                self._process_interpolation_batch_optimized(
+                    interp_batch, interpolated_frames, interp_indices, padding, scale, height, width
+                )
 
-        return output_frames
+        # 组装最终结果：源帧直接引用，插值帧从预分配内存中获取
+        return self._assemble_output_frames(images, interpolated_frames, frame_positions, interp_indices)
 
     def _batch_interpolate_frames(self, frame_batch, padding, scale):
         """Batch process multiple frame interpolations for better GPU utilization"""
@@ -144,24 +160,49 @@ class RIFEWrapper:
 
         return results
 
-    def _process_interpolation_batch(self, interp_batch, output_frames, padding, scale, height, width):
-        """Process a batch of frame interpolations"""
+    def _process_interpolation_batch_optimized(
+        self, interp_batch, interpolated_frames, interp_indices, padding, scale, height, width
+    ):
+        """Process a batch of frame interpolations with memory optimization"""
         if not interp_batch:
             return
 
         # Prepare frames for batch processing
         frame_data = [(f1, f2, factor) for f1, f2, factor, _ in interp_batch]
-        indices = [idx for _, _, _, idx in interp_batch]
+        batch_indices = [idx for _, _, _, idx in interp_batch]
 
         # Batch interpolate
         interpolated_results = self._batch_interpolate_frames(frame_data, padding, scale)
 
-        # Store results
-        for i, (interpolated, idx) in enumerate(zip(interpolated_results, indices)):
-            output_frames[idx] = interpolated[0, :, :height, :width].permute(1, 2, 0).cpu()
+        # Store results in pre-allocated memory
+        for i, (interpolated, original_idx) in enumerate(zip(interpolated_results, batch_indices)):
+            # Find the position in interpolated_frames array
+            interp_pos = interp_indices.index(original_idx)
+            interpolated_frames[interp_pos] = interpolated[0, :, :height, :width].permute(1, 2, 0).cpu()
 
         # Cleanup
-        del interpolated_results, frame_data, indices
+        del interpolated_results, frame_data, batch_indices
+
+    def _assemble_output_frames(self, images, interpolated_frames, frame_positions, interp_indices):
+        """组装最终输出帧：源帧直接引用，插值帧从预分配内存中获取"""
+        height, width = images.shape[1:3]
+
+        # 创建输出tensor列表而不是预分配大块内存
+        output_frames = []
+
+        interp_idx = 0
+        for idx, (source_idx1, source_idx2, interp_factor) in enumerate(frame_positions):
+            if interp_factor == 0.0 or source_idx1 == source_idx2:
+                # 使用源帧，直接引用输入图像
+                output_frames.append(images[source_idx1])
+            else:
+                # 使用插值帧
+                output_frames.append(interpolated_frames[interp_idx])
+                interp_idx += 1
+
+        # 将列表转换为tensor
+        result = torch.stack(output_frames, dim=0)
+        return result
 
     def _calculate_target_frame_positions(
         self, source_fps: float, target_fps: float, total_source_frames: int
