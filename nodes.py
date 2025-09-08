@@ -203,11 +203,69 @@ class RIFEInterpolation:
         return float("NaN")
 
 
+class CalculateLoadedFPS:
+    """
+    计算加载后的FPS，根据原始FPS和每n帧选择一帧的参数
+    Calculate loaded FPS based on source FPS and select_every_nth parameter
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "source_fps": (
+                    "FLOAT",
+                    {
+                        "default": 24,
+                        "min": 0.1,
+                        "max": 160.0,
+                        "step": 0.1,
+                        "display": "number",
+                        "tooltip": "Source video frame rate",
+                    },
+                ),
+                "select_every_nth": (
+                    "INT",
+                    {
+                        "default": 1,
+                        "min": 1,
+                        "max": 100,
+                        "step": 1,
+                        "display": "number",
+                        "tooltip": "Select every Nth frame (from VideoHelperSuite)",
+                    },
+                ),
+            },
+        }
+
+    RETURN_TYPES = ("FLOAT",)
+    RETURN_NAMES = ("loaded_fps",)
+
+    FUNCTION = "calculate_fps"
+
+    CATEGORY = "image/animation"
+
+    DESCRIPTION = "Calculate loaded FPS after frame selection (source_fps / select_every_nth)"
+
+    def calculate_fps(self, source_fps, select_every_nth):
+        # 验证输入
+        if source_fps <= 0:
+            raise ValueError("source_fps must be positive")
+        if select_every_nth <= 0:
+            raise ValueError("select_every_nth must be positive")
+
+        # 计算加载后的FPS
+        loaded_fps = source_fps / select_every_nth
+        return (loaded_fps,)
+
+
 # ComfyUI node mappings
 NODE_CLASS_MAPPINGS = {
     "RIFEInterpolation": RIFEInterpolation,
+    "CalculateLoadedFPS": CalculateLoadedFPS,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "RIFEInterpolation": "RIFE Frame Interpolation",
+    "CalculateLoadedFPS": "Calculate Loaded FPS",
 }
