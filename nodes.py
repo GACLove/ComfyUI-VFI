@@ -83,7 +83,7 @@ class RIFEInterpolation:
                 "use_fp16": (
                     "BOOLEAN",
                     {
-                        "default": False,
+                        "default": True,
                         "tooltip": "Use half precision (FP16) for faster inference and lower VRAM usage. Requires CUDA GPU",
                     },
                 ),
@@ -99,9 +99,7 @@ class RIFEInterpolation:
 
     DESCRIPTION = "Interpolate video frames using RIFE (Real-Time Intermediate Flow Estimation) to increase frame rate"
 
-    def interpolate(
-        self, images, source_fps, target_fps, scale, model_name="flownet.pkl", batch_size=8, use_fp16=False
-    ):
+    def interpolate(self, images, source_fps, target_fps, scale, model_name="flownet.pkl", batch_size=8, use_fp16=True):
         # Validate inputs
         if images is None or len(images) == 0:
             raise ValueError("No images provided")
