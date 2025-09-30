@@ -4,31 +4,33 @@ from typing import List, Optional, Tuple
 import torch
 from torch.nn import functional as F
 
+from .train_log.RIFE_HDv3 import Model
+
 
 class RIFEWrapper:
     """Wrapper for RIFE model to work with ComfyUI Image tensors"""
 
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-    def __init__(self, model_path, device: Optional[torch.device] = None):
+    def __init__(self, model_path, device: Optional[torch.device] = None, use_fp16: bool = False):
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.use_fp16 = use_fp16 and torch.cuda.is_available()
 
-        # Setup torch for optimal performance
         torch.set_grad_enabled(False)
         if torch.cuda.is_available():
             torch.backends.cudnn.enabled = True
             torch.backends.cudnn.benchmark = True
-            # Enable memory efficient attention if available
             if hasattr(torch.backends.cuda, "enable_mem_efficient_sdp"):
                 torch.backends.cuda.enable_mem_efficient_sdp(True)
-
-        # Load model
-        from .train_log.RIFE_HDv3 import Model
 
         self.model = Model()
         self.model.load_model(model_path, -1)
         self.model.eval()
         self.model.device()
+
+        # Convert to fp16 if requested
+        if self.use_fp16:
+            self.model.flownet = self.model.flownet.half()
 
     def interpolate_frames(
         self,
@@ -37,6 +39,7 @@ class RIFEWrapper:
         target_fps: float,
         scale: float = 1.0,
         progress_callback=None,
+        batch_size: int = 8,
     ) -> torch.Tensor:
         """
         Interpolate frames from source FPS to target FPS
@@ -47,11 +50,12 @@ class RIFEWrapper:
             target_fps: Target frame rate
             scale: Scale factor for processing
             progress_callback: Optional callback function that accepts (current, total) parameters
+            batch_size: Number of frames to process in parallel (default: 8)
 
         Returns:
             Interpolated ComfyUI Image tensor [M, H, W, C] in range [0, 1]
         """
-        # Validate input
+
         assert images.dim() == 4 and images.shape[-1] == 3, "Input must be [N, H, W, C] with C=3"
 
         if source_fps == target_fps:
@@ -60,148 +64,92 @@ class RIFEWrapper:
         total_source_frames = images.shape[0]
         height, width = images.shape[1:3]
 
-        # Calculate padding for model
+        # Calculate padding
         tmp = max(128, int(128 / scale))
         ph = ((height - 1) // tmp + 1) * tmp
         pw = ((width - 1) // tmp + 1) * tmp
         padding = (0, pw - width, 0, ph - height)
 
-        # Calculate target frame positions
+        # Calculate frame positions
         frame_positions = self._calculate_target_frame_positions(source_fps, target_fps, total_source_frames)
 
-        # 内存优化：分离源帧和插值帧，只为插值帧分配内存
-        total_frames = len(frame_positions)
-        # 统计需要插值的帧数量
-        interp_indices = []
-        for idx, (source_idx1, source_idx2, interp_factor) in enumerate(frame_positions):
-            if interp_factor != 0.0 and source_idx1 != source_idx2:
-                interp_indices.append(idx)
-
-        # 只为插值帧分配内存
-        num_interp_frames = len(interp_indices)
-        if num_interp_frames > 0:
-            interpolated_frames = torch.empty((num_interp_frames, height, width, 3), dtype=images.dtype, device="cpu")
-        else:
-            interpolated_frames = torch.empty((0, height, width, 3), dtype=images.dtype, device="cpu")
-
-        # Process frames with optimized memory management and batching
-        batch_size = 4  # Process 4 frames at a time for better GPU utilization
-        interp_batch = []
-
-        with torch.inference_mode():
-            for idx, (source_idx1, source_idx2, interp_factor) in enumerate(frame_positions):
-                if interp_factor == 0.0 or source_idx1 == source_idx2:
-                    # No interpolation needed, will handle in final assembly
-                    pass
-                else:
-                    # Collect frames for batch processing
-                    frame1 = images[source_idx1]
-                    frame2 = images[source_idx2]
-                    interp_batch.append((frame1, frame2, interp_factor, idx))
-
-                    # Process batch when it reaches the target size
-                    if len(interp_batch) >= batch_size:
-                        self._process_interpolation_batch_optimized(
-                            interp_batch, interpolated_frames, interp_indices, padding, scale, height, width
-                        )
-                        interp_batch = []
-
-                if progress_callback:
-                    progress_callback(idx + 1, total_frames)
-
-            # Process remaining frames in the batch
-            if interp_batch:
-                self._process_interpolation_batch_optimized(
-                    interp_batch, interpolated_frames, interp_indices, padding, scale, height, width
-                )
-
-        # 组装最终结果：源帧直接引用，插值帧从预分配内存中获取
-        return self._assemble_output_frames(images, interpolated_frames, frame_positions, interp_indices)
-
-    def _batch_interpolate_frames(self, frame_batch, padding, scale):
-        """Batch process multiple frame interpolations for better GPU utilization"""
-        batch_size = len(frame_batch)
-        if batch_size == 0:
-            return []
-
-        # Prepare batch tensors
-        batch_I0 = []
-        batch_I1 = []
-        timesteps = []
-
-        for frame1, frame2, interp_factor in frame_batch:
-            I0 = frame1.permute(2, 0, 1).unsqueeze(0).to(self.device)
-            I1 = frame2.permute(2, 0, 1).unsqueeze(0).to(self.device)
-
-            # Pad images
-            I0 = F.pad(I0, padding)
-            I1 = F.pad(I1, padding)
-
-            batch_I0.append(I0)
-            batch_I1.append(I1)
-            timesteps.append(interp_factor)
-
-        # Stack batch
-        batch_I0 = torch.cat(batch_I0, dim=0)
-        batch_I1 = torch.cat(batch_I1, dim=0)
-
-        # Batch inference
-        results = []
-        for i in range(batch_size):
-            interpolated = self.model.inference(
-                batch_I0[i : i + 1], batch_I1[i : i + 1], timestep=timesteps[i], scale=scale
-            )
-            results.append(interpolated)
-
-        # Cleanup
-        del batch_I0, batch_I1
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-
-        return results
-
-    def _process_interpolation_batch_optimized(
-        self, interp_batch, interpolated_frames, interp_indices, padding, scale, height, width
-    ):
-        """Process a batch of frame interpolations with memory optimization"""
-        if not interp_batch:
-            return
-
-        # Prepare frames for batch processing
-        frame_data = [(f1, f2, factor) for f1, f2, factor, _ in interp_batch]
-        batch_indices = [idx for _, _, _, idx in interp_batch]
-
-        # Batch interpolate
-        interpolated_results = self._batch_interpolate_frames(frame_data, padding, scale)
-
-        # Store results in pre-allocated memory
-        for i, (interpolated, original_idx) in enumerate(zip(interpolated_results, batch_indices)):
-            # Find the position in interpolated_frames array
-            interp_pos = interp_indices.index(original_idx)
-            interpolated_frames[interp_pos] = interpolated[0, :, :height, :width].permute(1, 2, 0).cpu()
-
-        # Cleanup
-        del interpolated_results, frame_data, batch_indices
-
-    def _assemble_output_frames(self, images, interpolated_frames, frame_positions, interp_indices):
-        """组装最终输出帧：源帧直接引用，插值帧从预分配内存中获取"""
-        height, width = images.shape[1:3]
-
-        # 创建输出tensor列表而不是预分配大块内存
+        # Pre-allocate output on CPU (NOT GPU to avoid OOM)
         output_frames = []
 
-        interp_idx = 0
-        for idx, (source_idx1, source_idx2, interp_factor) in enumerate(frame_positions):
+        # Build interpolation job list
+        interp_job_list = []
+        output_index_map = {}  # Maps job_idx -> output position
+
+        for out_idx, (source_idx1, source_idx2, interp_factor) in enumerate(frame_positions):
             if interp_factor == 0.0 or source_idx1 == source_idx2:
-                # 使用源帧，直接引用输入图像
+                # Direct copy, no interpolation needed
                 output_frames.append(images[source_idx1])
             else:
-                # 使用插值帧
-                output_frames.append(interpolated_frames[interp_idx])
-                interp_idx += 1
+                # Need interpolation - add placeholder
+                output_frames.append(None)
+                job_idx = len(interp_job_list)
+                interp_job_list.append((source_idx1, source_idx2, interp_factor))
+                output_index_map[job_idx] = out_idx
 
-        # 将列表转换为tensor
+        # Process interpolations in batches with streaming
+        num_jobs = len(interp_job_list)
+        gpu_dtype = torch.float16 if self.use_fp16 else torch.float32
+
+        with torch.inference_mode():
+            for batch_start in range(0, num_jobs, batch_size):
+                batch_end = min(batch_start + batch_size, num_jobs)
+                current_batch_size = batch_end - batch_start
+
+                # Collect unique source frames needed for this batch
+                source_frames_needed = set()
+                for job_idx in range(batch_start, batch_end):
+                    source_idx1, source_idx2, _ = interp_job_list[job_idx]
+                    source_frames_needed.add(source_idx1)
+                    source_frames_needed.add(source_idx2)
+
+                # Load only required source frames to GPU
+                source_cache = {}
+                for src_idx in source_frames_needed:
+                    source_cache[src_idx] = images[src_idx].to(device=self.device, dtype=gpu_dtype)
+
+                # Prepare batch tensors on GPU
+                batch_I0 = torch.empty((current_batch_size, 3, ph, pw), dtype=gpu_dtype, device=self.device)
+                batch_I1 = torch.empty((current_batch_size, 3, ph, pw), dtype=gpu_dtype, device=self.device)
+                timesteps = []
+
+                for i, job_idx in enumerate(range(batch_start, batch_end)):
+                    source_idx1, source_idx2, interp_factor = interp_job_list[job_idx]
+
+                    # Get frames from cache (already on GPU)
+                    I0 = source_cache[source_idx1].permute(2, 0, 1).unsqueeze(0)
+                    I1 = source_cache[source_idx2].permute(2, 0, 1).unsqueeze(0)
+
+                    # Pad
+                    batch_I0[i] = F.pad(I0, padding)[0]
+                    batch_I1[i] = F.pad(I1, padding)[0]
+                    timesteps.append(interp_factor)
+
+                # Batch inference
+                interpolated_batch = self.model.inference_batch(batch_I0, batch_I1, timesteps, scale=scale)
+
+                # Transfer results to CPU and store
+                for i, job_idx in enumerate(range(batch_start, batch_end)):
+                    output_idx = output_index_map[job_idx]
+                    result = interpolated_batch[i, :, :height, :width].permute(1, 2, 0).cpu().to(torch.float32)
+                    output_frames[output_idx] = result
+
+                # Update progress
+                if progress_callback:
+                    progress_callback(batch_end, num_jobs)
+
+                # Cleanup batch memory immediately
+                del batch_I0, batch_I1, interpolated_batch, source_cache
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+        # Stack all output frames
         result = torch.stack(output_frames, dim=0)
+
         return result
 
     def _calculate_target_frame_positions(

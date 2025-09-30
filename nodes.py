@@ -69,6 +69,24 @@ class RIFEInterpolation:
                     ["flownet.pkl"],
                     {"default": "flownet.pkl", "tooltip": "RIFE model to use for interpolation"},
                 ),
+                "batch_size": (
+                    "INT",
+                    {
+                        "default": 8,
+                        "min": 1,
+                        "max": 32,
+                        "step": 1,
+                        "display": "number",
+                        "tooltip": "Number of frames to process in parallel. Higher values are faster but use more VRAM",
+                    },
+                ),
+                "use_fp16": (
+                    "BOOLEAN",
+                    {
+                        "default": False,
+                        "tooltip": "Use half precision (FP16) for faster inference and lower VRAM usage. Requires CUDA GPU",
+                    },
+                ),
             },
         }
 
@@ -81,7 +99,9 @@ class RIFEInterpolation:
 
     DESCRIPTION = "Interpolate video frames using RIFE (Real-Time Intermediate Flow Estimation) to increase frame rate"
 
-    def interpolate(self, images, source_fps, target_fps, scale, model_name="flownet.pkl"):
+    def interpolate(
+        self, images, source_fps, target_fps, scale, model_name="flownet.pkl", batch_size=8, use_fp16=False
+    ):
         # Validate inputs
         if images is None or len(images) == 0:
             raise ValueError("No images provided")
@@ -99,41 +119,49 @@ class RIFEInterpolation:
         if abs(source_fps - target_fps) < 0.01:
             return (images,)
 
-        with torch.amp.autocast("cuda"):
-            # Get or load model
-            model = self._get_or_load_model(model_name)
+        # Get or load model
+        model = self._get_or_load_model(model_name, use_fp16=use_fp16)
 
-            duration = len(images) / source_fps
-            total_target_frames = int(duration * target_fps)
+        duration = len(images) / source_fps
+        total_target_frames = int(duration * target_fps)
 
-            pbar = None
-            if comfy and hasattr(comfy, "utils"):
-                pbar = comfy.utils.ProgressBar(total_target_frames)
+        pbar = None
+        if comfy and hasattr(comfy, "utils"):
+            pbar = comfy.utils.ProgressBar(total_target_frames)
 
-            def progress_callback(current, total):
-                if pbar:
-                    pbar.update_absolute(current, total)
+        def progress_callback(current, total):
+            if pbar:
+                pbar.update_absolute(current, total)
 
-            try:
+        # Use autocast context for mixed precision
+        autocast_enabled = use_fp16 and torch.cuda.is_available()
+        autocast_context = torch.amp.autocast("cuda") if autocast_enabled else torch.nullcontext()
+
+        try:
+            with autocast_context:
                 interpolated_images = model.interpolate_frames(
                     images=images,
                     source_fps=source_fps,
                     target_fps=target_fps,
                     scale=scale,
                     progress_callback=progress_callback,
+                    batch_size=batch_size,
                 )
 
-                return (interpolated_images,)
+            return (interpolated_images,)
 
-            except Exception as e:
-                raise RuntimeError(f"Frame interpolation failed: {str(e)}")
+        except Exception as e:
+            raise RuntimeError(f"Frame interpolation failed: {str(e)}")
 
-    def _get_or_load_model(self, model_name):
+    def _get_or_load_model(self, model_name, use_fp16=False):
         """Load model from cache or disk"""
         global MODEL_CACHE
 
-        if model_name in MODEL_CACHE:
-            return MODEL_CACHE[model_name]
+        # Create cache key with fp16 flag
+        cache_key = f"{model_name}_fp16" if use_fp16 else model_name
+
+        if cache_key in MODEL_CACHE:
+            return MODEL_CACHE[cache_key]
 
         # Look for model in multiple locations
         model_paths = [
@@ -193,8 +221,8 @@ class RIFEInterpolation:
 
         # Load model
         print(f"Loading RIFE model from: {model_path}")
-        model = RIFEWrapper(model_path)
-        MODEL_CACHE[model_name] = model
+        model = RIFEWrapper(model_path, use_fp16=use_fp16)
+        MODEL_CACHE[cache_key] = model
 
         return model
 

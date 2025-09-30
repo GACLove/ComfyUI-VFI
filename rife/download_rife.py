@@ -11,6 +11,14 @@ from pathlib import Path
 import requests
 
 
+def is_huggingface_accessible():
+    try:
+        _response = requests.get("https://huggingface.co", timeout=3)
+        return True
+    except (requests.ConnectionError, requests.Timeout):
+        return False
+
+
 def get_base_dir():
     """Get project root directory"""
     return Path(__file__).parent.parent
@@ -47,7 +55,7 @@ def extract_zip(zip_path, extract_to):
 
 def find_flownet_pkl(extract_dir):
     """Find flownet.pkl file in extracted directory"""
-    for root, dirs, files in os.walk(extract_dir):
+    for root, _dirs, files in os.walk(extract_dir):
         for file in files:
             if file == "flownet.pkl":
                 return os.path.join(root, file)
@@ -72,20 +80,19 @@ def main():
 
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    zip_url = "https://huggingface.co/hzwer/RIFE/resolve/main/RIFEv4.26_0921.zip"
+    if not is_huggingface_accessible():
+        print("huggingface.co is not accessible, using hf-mirror.com")
+        zip_url = "https://hf-mirror.com/hzwer/RIFE/resolve/main/RIFEv4.26_0921.zip"
+    else:
+        zip_url = "https://huggingface.co/hzwer/RIFE/resolve/main/RIFEv4.26_0921.zip"
+
     zip_path = temp_dir / "RIFEv4.26_0921.zip"
 
     try:
-        # Download zip file
         download_file(zip_url, zip_path)
-
-        # Extract file
         extract_zip(zip_path, temp_dir)
-
-        # Find flownet.pkl file
         flownet_pkl = find_flownet_pkl(temp_dir)
         if flownet_pkl:
-            # Copy flownet.pkl to target directory
             target_file = target_dir / "flownet.pkl"
             shutil.copy2(flownet_pkl, target_file)
             print(f"flownet.pkl copied to: {target_file}")
@@ -100,10 +107,8 @@ def main():
         print(f"Error: {e}")
         return 1
     finally:
-        # Clean up temporary files
         print("Cleaning up temporary files...")
 
-        # Delete zip file if exists
         if zip_path.exists():
             try:
                 zip_path.unlink()
@@ -111,7 +116,6 @@ def main():
             except Exception as e:
                 print(f"Error deleting zip file: {e}")
 
-        # Delete extracted folders
         for item in temp_dir.iterdir():
             if item.is_dir():
                 try:
@@ -120,7 +124,6 @@ def main():
                 except Exception as e:
                     print(f"Error deleting directory {item}: {e}")
 
-        # Delete the temp directory itself if empty
         if temp_dir.exists() and not any(temp_dir.iterdir()):
             try:
                 temp_dir.rmdir()

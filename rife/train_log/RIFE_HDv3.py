@@ -72,6 +72,34 @@ class Model:
         del flow, mask, merged
         return result
 
+    def inference_batch(self, batch_img0, batch_img1, timesteps, scale=1.0):
+        """Batch inference for multiple frame pairs at once"""
+        batch_size = batch_img0.shape[0]
+
+        # Concatenate all pairs
+        imgs = torch.cat((batch_img0, batch_img1), 1)
+
+        # Pre-calculate scale list
+        scale_list = [16 / scale, 8 / scale, 4 / scale, 2 / scale, 1 / scale]
+
+        # Process all timesteps (convert list to tensor if needed)
+        if isinstance(timesteps, list):
+            timesteps = torch.tensor(timesteps, device=batch_img0.device, dtype=batch_img0.dtype)
+
+        # Batch process through network
+        results = []
+        for i in range(batch_size):
+            flow, mask, merged = self.flownet(
+                imgs[i : i + 1], timesteps[i] if timesteps.dim() > 0 else timesteps, scale_list
+            )
+            results.append(merged[-1])
+            # Clear intermediate results
+            del flow, mask, merged
+
+        # Stack results
+        result = torch.cat(results, dim=0)
+        return result
+
     def update(self, imgs, gt, learning_rate=0, mul=1, training=True, flow_gt=None):
         for param_group in self.optimG.param_groups:
             param_group["lr"] = learning_rate
